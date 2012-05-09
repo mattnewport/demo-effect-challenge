@@ -448,19 +448,22 @@ class App : public IApp {
 public:
 	App(void* hwnd, int width, int height);
 	~App();
-	void Update() override;
+	void Update(bool mouseButtons[2], int mouseX, int mouseY) override;
 
 
 private:
 	void DrawTexture(size_t texIndex, const Vector2& offset);
-	void UpdateTexture();
+	void UpdateTexture(bool mouseButtons[2], int mouseX, int mouseY);
 
 	int mWidth;
 	int mHeight;
 
 	vector<float> mSources;
-	vector<float> mus;
-	vector<float> mvs;
+	vector<float> mUTurb;
+	vector<float> mVTurb;
+	vector<float> mus[2];
+	vector<float> mvs[2];
+	vector<float> mDensity[2];
 
 	vector<float> mOldHeatVals;
 	vector<float> mNewHeatVals;
@@ -469,18 +472,6 @@ private:
 	vector<float> mAfterSources;
 	vector<float> mAfterDiffuse;
 	vector<float> mAfterAdvect;
-
-	vector<float> mUAfterSources;
-	vector<float> mUAfterDiffuse;
-	vector<float> mUAfterProject1;
-	vector<float> mUAfterAdvect;
-	vector<float> mUAfterProject2;
-
-	vector<float> mVAfterSources;
-	vector<float> mVAfterDiffuse;
-	vector<float> mVAfterProject1;
-	vector<float> mVAfterAdvect;
-	vector<float> mVAfterProject2;
 
 	mt19937 mGen;
 
@@ -519,31 +510,32 @@ private:
 	ID3D11BufferPtr mVsConstants;
 	ID3D11BufferPtr mPsConstants;
 	ID3D11SamplerStatePtr mSamplerState;
+
+	const float diff;
+	const float visc;
+	const float force;
+	const float source;
+
+	// No copy or assignment
+	App(const App&);
+	App operator=(const App&);
 };
 
 App::App(void* hwnd, int width, int height) :
 	mWidth(width),
 	mHeight(height),
 	mSources((width + 2) * (height + 2), 0.0f),
-	mus((width + 2) * (height + 2), 0.0f),
-	mvs((width + 2) * (height + 2), -0.2f),
 	mOldHeatVals((width + 2) * (height + 2), 0.0f),
 	mNewHeatVals((width + 2) * (height + 2), 0.0f),
 	mColors((width + 2) * (height + 2)),
 	mAfterSources((width + 2) * (height + 2), 0.0f),
 	mAfterDiffuse((width + 2) * (height + 2), 0.0f),
 	mAfterAdvect((width + 2) * (height + 2), 0.0f),
-	mUAfterSources((width + 2) * (height + 2), 0.0f),
-	mUAfterDiffuse((width + 2) * (height + 2), 0.0f),
-	mUAfterProject1((width + 2) * (height + 2), 0.0f),
-	mUAfterAdvect((width + 2) * (height + 2), 0.0f),
-	mUAfterProject2((width + 2) * (height + 2), 0.0f),
-	mVAfterSources((width + 2) * (height + 2), 0.0f),
-	mVAfterDiffuse((width + 2) * (height + 2), 0.0f),
-	mVAfterProject1((width + 2) * (height + 2), 0.0f),
-	mVAfterAdvect((width + 2) * (height + 2), 0.0f),
-	mVAfterProject2((width + 2) * (height + 2), 0.0f),
-	mStartTime(system_clock::now())
+	mStartTime(system_clock::now()),
+	diff(0.0001f),
+	visc(0.0f),
+	force(0.2f),
+	source(50.0f)
 {
 #ifdef _DEBUG
 	UINT d3dCreateFlags = D3D11_CREATE_DEVICE_DEBUG;
@@ -619,24 +611,33 @@ App::App(void* hwnd, int width, int height) :
 		//auto lastRowBegin = begin(mSources) + (y) * (mWidth + 2);
 		//transform(lastRowBegin, lastRowBegin + mWidth + 2, lastRowBegin, [=](const float val) { return val * (0.99); });
 		uniform_int_distribution<int> xDist(64, mWidth - 64);
-		for (auto seed = 0; seed < 100; ++seed) {
-			Set(xDist(mGen), y, &mSources[0], mWidth + 2, 1.0f);
+		for (auto seed = 0; seed < 10; ++seed) {
+			Set(xDist(mGen), y, &mSources[0], mWidth + 2, source);
 		}
 	}
 
+	const int dim = (width + 2) * (height + 2);
+	mDensity[0].resize(dim);
+	fill(begin(mDensity[0]), end(mDensity[0]), 0.0f);
+	mDensity[1].resize(dim);
+	fill(begin(mDensity[1]), end(mDensity[1]), 0.0f);
+
+	mUTurb.resize(dim);
+	mVTurb.resize(dim);
 	for (auto y = 1; y <= mHeight; ++y) {
 		for (auto x = 1; x <= mWidth; ++x) {
-			Set(x, y, &mus[0], mWidth + 2, Turbulence(x / 128.0f, y / 128.0f, 0.0f) * 0.1f);
-			Set(x, y, &mvs[0], mWidth + 2, Turbulence(x / 128.0f, y / 128.0f, 10.0f) * 0.1f - 0.2f);
+			Set(x, y, &mUTurb[0], mWidth + 2, Turbulence(x / 128.0f, y / 128.0f, 0.0f) * force);
+			Set(x, y, &mVTurb[0], mWidth + 2, Turbulence(x / 128.0f, y / 128.0f, 10.0f) * force - force);
 		}
 	}
-
-	mUAfterSources = mus;
-	mVAfterSources = mvs;
-	mUAfterProject1 = mus;
-	mVAfterProject1 = mvs;
-	mUAfterProject2 = mus;
-	mVAfterProject2 = mvs;
+	mus[0] = mUTurb;
+	mvs[0] = mVTurb;
+	mus[1].resize(dim);
+	mvs[1].resize(dim);
+	fill(begin(mus[1]), end(mus[1]), 0.0f);
+	fill(begin(mvs[1]), end(mvs[1]), 0.0f);
+	mus[1] = mus[0];
+	mvs[1] = mvs[0];
 }
 
 App::~App() {
@@ -665,54 +666,78 @@ void App::HeatSpread() {
 }
 
 void App::StamVelocity(const float dt) {
-	const float visc = 0.1f;
-	AddSource(mWidth, &mUAfterSources[0], &mus[0], dt);
-	AddSource(mWidth, &mVAfterSources[0], &mvs[0], dt);
-	transform(begin(mUAfterSources), end(mUAfterSources), begin(mVAfterSources), begin(mColors), [](float u, float v) {
+	mus[0] = mUTurb;
+	mvs[0] = mVTurb;
+	AddSource(mWidth, &mus[1][0], &mus[0][0], dt);
+	AddSource(mWidth, &mvs[1][0], &mvs[0][0], dt);
+
+	transform(begin(mus[1]), end(mus[1]), begin(mvs[1]), begin(mColors), [](float u, float v) {
+		return Vector3(u + 0.5f, v + 0.5f, 0.0f); 
+	});
+	FillTexture(mImmediateContext, mTex[1], &mColors[mWidth + 2 + 1], mWidth + 2);
+
+	mus[0].swap(mus[1]);
+	Diffuse(mWidth, &mus[1][0], &mus[0][0], visc, dt, 1);
+	mvs[0].swap(mvs[1]);
+	Diffuse(mWidth, &mvs[1][0], &mvs[0][0], visc, dt, 2);
+	Project(mWidth, &mus[1][0], &mvs[1][0], &mus[0][0], &mvs[0][0]);
+
+	transform(begin(mus[1]), end(mus[1]), begin(mvs[1]), begin(mColors), [](float u, float v) {
+		return Vector3(u + 0.5f, v + 0.5f, 0.0f); 
+	});
+	FillTexture(mImmediateContext, mTex[2], &mColors[mWidth + 2 + 1], mWidth + 2);
+
+	mus[0].swap(mus[1]);
+	mvs[0].swap(mvs[1]);
+	Advect(mWidth, &mus[1][0], &mus[0][0], &mus[0][0], &mvs[0][0], dt, 1);
+	Advect(mWidth, &mvs[1][0], &mvs[0][0], &mus[0][0], &mvs[0][0], dt, 2);
+	Project(mWidth, &mus[1][0], &mvs[1][0], &mus[0][0], &mvs[0][0]);
+
+	transform(begin(mus[1]), end(mus[1]), begin(mvs[1]), begin(mColors), [](float u, float v) {
 		return Vector3(u + 0.5f, v + 0.5f, 0.0f); 
 	});
 	FillTexture(mImmediateContext, mTex[3], &mColors[mWidth + 2 + 1], mWidth + 2);
-	mUAfterDiffuse = mUAfterSources;
-	mVAfterDiffuse = mVAfterSources;
-	Diffuse(mWidth, &mUAfterDiffuse[0], &mUAfterSources[0], visc, dt, 1);
-	Diffuse(mWidth, &mVAfterDiffuse[0], &mVAfterSources[0], visc, dt, 2);
-	mUAfterProject1 = mUAfterDiffuse;
-	mVAfterProject1 = mVAfterDiffuse;
-	Project(mWidth, &mUAfterProject1[0], &mVAfterProject1[0], &mUAfterSources[0], &mVAfterSources[0]);
-//	FillTexture(mImmediateContext, mTex[3], &mUAfterProject1[mWidth + 2 + 1], mWidth + 2);
-	Advect(mWidth, &mUAfterAdvect[0], &mUAfterProject1[0], &mUAfterProject1[0], &mVAfterProject1[0], dt, 1);
-	Advect(mWidth, &mVAfterAdvect[0], &mVAfterProject1[0], &mUAfterProject1[0], &mVAfterProject1[0], dt, 2);
-	mUAfterProject2 = mUAfterAdvect;
-	mVAfterProject2 = mVAfterAdvect;
-//	FillTexture(mImmediateContext, mTex[3], &mVAfterAdvect[mWidth + 2 + 1], mWidth + 2);
-	Project(mWidth, &mUAfterProject2[0], &mVAfterProject2[0], &mUAfterProject1[0], &mVAfterProject1[0]);
-	mUAfterSources = mUAfterProject2;
-	mVAfterSources = mVAfterProject2;
 }
 
 void App::StamDiffuse(const float delta) {
-//	FillTexture(mImmediateContext, mTex[3], &mSources[mWidth + 2 + 1], mWidth + 2);
+	mDensity[0] = mSources;
+	AddSource(mWidth, &mDensity[1][0], &mDensity[0][0], delta);
 
-	AddSource(mWidth, &mAfterSources[0], &mSources[0], delta);
+	mDensity[1].swap(mDensity[0]);
+	Diffuse(mWidth, &mDensity[1][0], &mDensity[0][0], diff, delta);
 
-//	FillTexture(mImmediateContext, mTex[1], &mAfterSources[mWidth + 2 + 1], mWidth + 2);
+	mDensity[1].swap(mDensity[0]);
+	Advect(mWidth, &mDensity[1][0], &mDensity[0][0], &mus[1][0], &mvs[1][0], delta);
 
-	mAfterDiffuse = mAfterSources;
-	Diffuse(mWidth, &mAfterDiffuse[0], &mAfterSources[0], 1.0f, delta);
-
-//	FillTexture(mImmediateContext, mTex[2], &mAfterDiffuse[mWidth + 2 + 1], mWidth + 2);
-
-	Advect(mWidth, &mAfterAdvect[0], &mAfterDiffuse[0], &mus[0], &mvs[0], delta);
-
-	FillTexture(mImmediateContext, mTex[0], &mAfterAdvect[mWidth + 2 + 1], mWidth + 2);
-
-	mAfterSources = mAfterAdvect;
+	FillTexture(mImmediateContext, mTex[0], &mDensity[1][mWidth + 2 + 1], mWidth + 2);
 }
 
-void App::UpdateTexture() {
+void App::UpdateTexture(bool mouseButtons[2], int mouseX, int mouseY) {
 	static auto startTime = static_cast<float>(duration_cast<milliseconds>(system_clock::now() - mStartTime).count()) / 1000.0f;
 	auto elapsed = static_cast<float>(duration_cast<milliseconds>(system_clock::now() - mStartTime).count()) / 1000.0f;
 	auto delta = elapsed - startTime;
+
+	fill(begin(mUTurb), end(mUTurb), 0.0f);
+	fill(begin(mVTurb), end(mVTurb), 0.0f);
+	fill(begin(mSources), end(mSources), 0.0f);
+
+	if (mouseX > 0 && mouseX < mWidth && mouseY > 0 && mouseY < mHeight) {
+		static int oldMouseX = mouseX;
+		static int oldMouseY = mouseY;
+
+		if (mouseButtons[0]) {
+			Set(mouseX, mouseY, &mUTurb[0], mWidth + 2, force * 10.0f * (mouseX - oldMouseX));
+			Set(mouseX, mouseY, &mVTurb[0], mWidth + 2, force * 10.0f * (mouseY - oldMouseY));
+		}
+
+		if (mouseButtons[1])
+			Set(mouseX, mouseY, &mSources[0], mWidth + 2, source);
+
+		if (mouseButtons[0] || mouseButtons[1]) {
+			oldMouseX = mouseX;
+			oldMouseY = mouseY;
+		}
+	}
 
 	//auto elapsed = static_cast<float>(duration_cast<milliseconds>(system_clock::now() - mStartTime).count()) / 1000.0f;
 	// BasicFire(data, rowPitch, width, height);
@@ -782,14 +807,14 @@ void App::DrawTexture(size_t texIndex, const Vector2& offset)
 	mImmediateContext->Draw(3, 0);
 }
 
-void App::Update() {
+void App::Update(bool mouseButtons[2], int mouseX, int mouseY) {
 	const FLOAT color[] = { 0.1f, 0.1f, 1.0f, 1.0f };
 	mImmediateContext->ClearRenderTargetView(mBackBufferRenderTargetView, color);
 
 	ID3D11RenderTargetView* renderTargetView = mBackBufferRenderTargetView;
 	mImmediateContext->OMSetRenderTargets(1, &renderTargetView, NULL);
 
-	UpdateTexture();
+	UpdateTexture(mouseButtons, mouseX, mouseY);
 
 	mImmediateContext->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	mImmediateContext->IASetInputLayout(mInputLayout);

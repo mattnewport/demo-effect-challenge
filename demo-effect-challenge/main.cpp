@@ -5,7 +5,7 @@
 
 namespace
 {
-	bool mouseButtonDown[2] = { false, false };
+	bool mouseButtonDown[3] = { false, false };
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
